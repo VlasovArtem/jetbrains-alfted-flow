@@ -20,6 +20,9 @@ After that the flow try to find appropriate app links from the folder `~/Library
 ## Shortcut
 `SHIFT-CMD-E`
 
+## Command
+`openj`
+
 ## Examples
 ![Screenshot 2021-06-29 at 22 11 08](https://user-images.githubusercontent.com/3629440/123855486-a1b75d00-d928-11eb-8c66-e50cbb725b0f.png)
 
