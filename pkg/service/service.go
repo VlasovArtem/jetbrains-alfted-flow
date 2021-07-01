@@ -15,6 +15,7 @@ type ProjectInfo struct {
 	JetbrainsAppPath     string
 	Valid                bool
 	ProjectBuildDetails  ProjectBuildDetails
+	Opened               bool
 }
 
 type ProjectBuildDetails struct {
@@ -121,8 +122,19 @@ func (s *ProjectService) FilterProjects(projectName string) (result []ProjectInf
 }
 
 func (s *ProjectService) PrepareServices() {
+	var opened []ProjectInfo
+	var closed []ProjectInfo
+
 	for _, info := range s.projectsMap {
-		s.sortedProjects = append(s.sortedProjects, info)
+		if info.Opened {
+			opened = append(opened, info)
+		} else {
+			closed = append(closed, info)
+		}
 	}
-	sort.Sort(SortedByOpenDate(s.sortedProjects))
+
+	sort.Sort(SortedByOpenDate(opened))
+	sort.Sort(SortedByOpenDate(closed))
+
+	s.sortedProjects = append(opened, closed...)
 }

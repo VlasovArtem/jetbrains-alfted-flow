@@ -11,9 +11,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
+
+var possibleProductNames = []string{"AI", "OC", "CL", "DB", "GO", "IC", "IU", "PS", "PC", "PY", "RD", "RM", "WS", "IE", "MPS", "PE"}
 
 type application struct {
 	XMLName   xml.Name  `xml:"application"`
@@ -53,10 +56,20 @@ type RecentProjectMetaInfo struct {
 	XMLName            xml.Name `xml:"RecentProjectMetaInfo"`
 	FrameTitle         string   `xml:"frameTitle,attr"`
 	ProjectWorkspaceId string   `xml:"projectWorkspaceId,attr"`
+	Opened             string   `xml:"opened,attr"`
 	Option             options  `xml:"option"`
 }
 
 type options []option
+
+type applicationParsedDto struct {
+	projectDetails       service.ProjectDetails
+	path                 string
+	buildTimestamp       int
+	projectOpenTimestamp int
+	projectBuildDetails  service.ProjectBuildDetails
+	opened               bool
+}
 
 type project struct {
 	recentProjectPath string
@@ -64,6 +77,20 @@ type project struct {
 }
 
 var rootPath string
+
+type buildNumberType []string
+
+func (bn buildNumberType) Len() int {
+	return len(bn)
+}
+
+func (bn buildNumberType) Less(i, j int) bool {
+	return bn[i] > bn[j]
+}
+
+func (bn buildNumberType) Swap(i, j int) {
+	bn[i], bn[j] = bn[j], bn[i]
+}
 
 func ReadProjects(service *service.ProjectService, ignoreProjects map[string]string) error {
 	homeDir, err := os.UserHomeDir()
@@ -73,7 +100,7 @@ func ReadProjects(service *service.ProjectService, ignoreProjects map[string]str
 
 	rootPath = fmt.Sprintf("%s/Library/Application Support/JetBrains/", homeDir)
 	var projects []project
-	var toolboxFolderPath string = ""
+	var toolboxFolderPath = ""
 	err = filepath.Walk(rootPath,
 		func(path string, info os.FileInfo, err error) error {
 			if info != nil {
@@ -105,6 +132,7 @@ func ReadProjects(service *service.ProjectService, ignoreProjects map[string]str
 	}
 
 	jetbrainsAppPath := findJetbrainsAppPath(rootPath + "Toolbox")
+	var parsedDTOsFinal []applicationParsedDto
 
 	for _, project := range projects {
 		application, err := readRecentFile(project)
@@ -113,16 +141,66 @@ func ReadProjects(service *service.ProjectService, ignoreProjects map[string]str
 			return err
 		}
 
-		projectInfos, err := application.parseRecentFile(project.applicationName, homeDir, jetbrainsAppPath)
+		parsedDTOs,  err := application.parseRecentFile(project.applicationName, homeDir)
 		if err != nil {
 			return err
 		}
-		service.AddProjects(projectInfos)
+
+		parsedDTOsFinal = append(parsedDTOsFinal, parsedDTOs...)
 	}
+
+	service.AddProjects(mapToProjectInfos(parsedDTOsFinal, jetbrainsAppPath))
 
 	service.PrepareServices()
 
 	return err
+}
+
+func mapToProjectInfos(final []applicationParsedDto, path map[string]string) (projectInfos []service.ProjectInfo) {
+	productionCodeToPaths := make(map[string][]string)
+	var failedDTOs []applicationParsedDto
+
+	for _, dto := range final {
+		path := path[dto.projectBuildDetails.BuildNumber]
+
+		if path != "" {
+			projectInfos = append(projectInfos, dto.toProjectInfo(path))
+			productionCodeToPaths[dto.projectBuildDetails.ProductionCode] = append(productionCodeToPaths[dto.projectBuildDetails.ProductionCode], path)
+		} else {
+			failedDTOs = append(failedDTOs, dto)
+		}
+	}
+
+	for _, dto := range failedDTOs {
+		path := productionCodeToPaths[dto.projectBuildDetails.ProductionCode]
+
+		if path != nil {
+			sort.Slice(path, func(i, j int) bool {
+				switch strings.Compare(path[i], path[j]) {
+				case -1:
+					return true
+				}
+				return false
+			})
+
+			projectInfos = append(projectInfos, dto.toProjectInfo(path[0]))
+		}
+	}
+
+	return projectInfos
+}
+
+func (d *applicationParsedDto) toProjectInfo(jetbrainsAppPath string) service.ProjectInfo {
+	return service.ProjectInfo{
+		ProjectDetails:       d.projectDetails,
+		Path:                 d.path,
+		BuildTimestamp:       d.buildTimestamp,
+		ProjectOpenTimestamp: d.projectOpenTimestamp,
+		JetbrainsAppPath:     jetbrainsAppPath,
+		Valid: true,
+		ProjectBuildDetails: d.projectBuildDetails,
+		Opened: d.opened,
+	}
 }
 
 func readRecentFile(p project) (application application, err error) {
@@ -149,7 +227,7 @@ func readRecentFile(p project) (application application, err error) {
 	return application, nil
 }
 
-func (app *application) parseRecentFile(applicationName string, userHomeDir string, path map[string]string) (projectInfos []service.ProjectInfo, err error) {
+func (app *application) parseRecentFile(applicationName string, userHomeDir string) (parsedDTOs []applicationParsedDto, err error) {
 	for _, entry := range app.Component.Option.Map.Entry {
 		projectPath := entry.Key
 
@@ -165,26 +243,46 @@ func (app *application) parseRecentFile(applicationName string, userHomeDir stri
 
 			buildTimestamp, _ := strconv.Atoi(recentProjectMetaInfo.Option.findFieldValue("buildTimestamp"))
 			projectOpenTimestamp, _ := strconv.Atoi(recentProjectMetaInfo.Option.findFieldValue("projectOpenTimestamp"))
+			productionCode := recentProjectMetaInfo.Option.findFieldValue("productionCode")
 			buildNumber := strings.ReplaceAll(
 				recentProjectMetaInfo.Option.findFieldValue("build"),
-				recentProjectMetaInfo.Option.findFieldValue("productionCode")+"-",
+				productionCode+"-",
 				"")
 
-			projectInfos = append(projectInfos, service.ProjectInfo{
-				ProjectDetails: service.ProjectDetails{
+			parsedDTOs = append(parsedDTOs, applicationParsedDto{
+				projectDetails: service.ProjectDetails{
 					Name:    projectName,
 					Project: applicationName,
 				},
-				Path:                 strings.ReplaceAll(projectPath, "$USER_HOME$", userHomeDir),
-				BuildTimestamp:       buildTimestamp / 1000,
-				ProjectOpenTimestamp: projectOpenTimestamp / 1000,
-				JetbrainsAppPath: path[buildNumber],
-				Valid: path[buildNumber] != "",
+				path:                 strings.ReplaceAll(projectPath, "$USER_HOME$", userHomeDir),
+				buildTimestamp:       buildTimestamp / 1000,
+				projectOpenTimestamp: projectOpenTimestamp / 1000,
+				projectBuildDetails:  service.ProjectBuildDetails{
+					ProductionCode:       productionCode,
+					BuildNumber:          buildNumber,
+				},
+				opened: strings.EqualFold(
+					strings.ToLower(value.RecentProjectMetaInfo.Opened),
+					"true"),
 			})
 		}
 	}
 
-	return projectInfos, nil
+
+	//for _, project := range projectInfos {
+	//	if !project.Valid {
+	//		data := productionCodeToPaths[project.ProductionCode]
+	//		if data == nil {
+	//			log.Println("Path for the project "+ project.Name + " and product code " + project.ProductionCode + " is not found.")
+	//		} else {
+	//			sort.Sort(data)
+	//			project.JetbrainsAppPath = data[0]
+	//			project.Valid = project.JetbrainsAppPath != ""
+	//		}
+	//	}
+	//}
+
+	return parsedDTOs, nil
 }
 
 func findJetbrainsAppPath(toolboxPath string) map[string]string {

@@ -55,7 +55,11 @@ func Open(wf *aw.Workflow) {
 
 func projectInfoToWfItem(projectInfo *service.ProjectInfo, wf *aw.Workflow) {
 	if projectInfo.Valid {
-		wf.NewItem(fmt.Sprintf("%s %s", projectInfo.Name, generateLastOpenDateString(projectInfo.ProjectOpenTimestamp))).
+		item := fmt.Sprintf("%s %s", projectInfo.Name, generateLastOpenDateString(projectInfo.ProjectOpenTimestamp))
+		if projectInfo.Opened {
+			item = item + " (Opened)"
+		}
+		wf.NewItem(item).
 			Subtitle(projectInfo.Path).
 			Icon(icons[projectInfo.Project]).
 			Arg(projectInfo.JetbrainsAppPath, projectInfo.Path).
