@@ -30,3 +30,6 @@ After that the flow try to find appropriate app links from the folder `~/Library
 ```shell
 go build && alfred build
 ```
+
+## Known Issues
+Currently if you lauch an application (for example Intellij Idea) using alfred it rewrites environment variables. And if you lanch the project it will take the environment properties from lauched application.
